@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
@@ -25,6 +26,21 @@ type CreateTokenParams struct {
 	Description           string `json:"description,omitempty"`
 	IncludeReferenceToken *bool  `json:"include_reference_token,omitempty"`
 	Username              string `json:"username,omitempty"`
+}
+
+type GetTokensParams struct {
+	Description string `json:"description,omitempty"`
+	Refreshable *bool  `json:"refreshable,omitempty"`
+}
+
+type Token struct {
+	Description string `json:"Description,omitempty"`
+	Expiry      int    `json:"expiry,omitempty"`
+	IssuedAt    int    `json:"issued_at,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	Refreshable bool   `json:"refreshable,omitempty"`
+	Subject     string `json:"subject,omitempty"`
+	TokenId     string `json:"token_id,omitempty"`
 }
 
 func NewCreateTokenParams(params CreateTokenParams) CreateTokenParams {
@@ -61,6 +77,102 @@ func (ps *TokenService) RefreshAccessToken(token CreateTokenParams) (auth.Create
 	return ps.createAccessToken(params)
 }
 
+// Return token information, based on the authenticated principal and optional filters.
+func (ps *TokenService) GetTokens(params GetTokensParams) ([]Token, error) {
+	// Create token URL
+	url, err := ps.accessTokenURL("")
+	if err != nil {
+		return nil, err
+	}
+	q := url.Query()
+	if params.Description != "" {
+		q.Add("description", params.Description)
+	}
+	if params.Refreshable != nil {
+		q.Add("refreshable", fmt.Sprintf("%b", params.Refreshable))
+	}
+	url.RawQuery = q.Encode()
+
+	// Send token request and check for errors
+	httpDetails := ps.ServiceDetails.CreateHttpClientDetails()
+	resp, body, _, err := ps.client.SendGet(url.String(), false, &httpDetails)
+	if err != nil {
+		return nil, err
+	}
+	// The case the requested user is not found
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return nil, err
+	}
+
+	// Unmarshall the response body and return
+	var response struct{ Tokens []Token }
+	err = json.Unmarshal(body, &response)
+	return response.Tokens, errorutils.CheckError(err)
+}
+
+// Return the token information by token ID
+// Returning a pointer to the Token so it can be nil
+func (ps *TokenService) GetTokenById(tokenId string) (*Token, error) {
+	// Create token URL
+	url, err := ps.accessTokenURL(tokenId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send token request and check for errors
+	httpDetails := ps.ServiceDetails.CreateHttpClientDetails()
+	resp, body, _, err := ps.client.SendGet(url.String(), false, &httpDetails)
+	if err != nil {
+		return nil, err
+	}
+	// The case the requested user is not found
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return nil, err
+	}
+
+	// Unmarshall the response body and return
+	var token Token
+	err = json.Unmarshal(body, &token)
+	return &token, errorutils.CheckError(err)
+}
+
+// Revoke an access token by specifying the token_id
+func (ps *TokenService) RevokeToken(tokenId string) error {
+	// Create token URL
+	url, err := ps.accessTokenURL(tokenId)
+	if err != nil {
+		return err
+	}
+
+	// Send token request and check for errors
+	httpDetails := ps.ServiceDetails.CreateHttpClientDetails()
+	resp, body, err := ps.client.SendDelete(url.String(), nil, &httpDetails)
+	if err != nil {
+		return err
+	}
+	return errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK)
+}
+
+// Return the parsed url.URL for the access token endpoint
+// This is /access/api/v1/tokens with an optional /token-id suffix
+func (ps *TokenService) accessTokenURL(tokenId string) (*url.URL, error) {
+	u, err := url.Parse(ps.ServiceDetails.GetUrl())
+	if err != nil {
+		return nil, err
+	}
+	u = u.JoinPath(tokensApi)
+	if tokenId != "" {
+		u = u.JoinPath(tokenId)
+	}
+	return u, nil
+}
+
 // createAccessToken is used to create & refresh access tokens.
 func (ps *TokenService) createAccessToken(params CreateTokenParams) (auth.CreateTokenResponseData, error) {
 	// Create output response variable
@@ -79,8 +191,13 @@ func (ps *TokenService) createAccessToken(params CreateTokenParams) (auth.Create
 	if errorutils.CheckError(err) != nil {
 		return tokenInfo, err
 	}
-	url := fmt.Sprintf("%s%s", ps.ServiceDetails.GetUrl(), tokensApi)
-	resp, body, err := ps.client.SendPost(url, requestContent, &httpDetails)
+
+	// Send the Post request to either create or refresh the token
+	url, err := ps.accessTokenURL("")
+	if err != nil {
+		return tokenInfo, err
+	}
+	resp, body, err := ps.client.SendPost(url.String(), requestContent, &httpDetails)
 	if err != nil {
 		return tokenInfo, err
 	}
