@@ -1477,6 +1477,41 @@ err = accessManager.UpdateGroupInProject("tstprj", "tstgroup", projectGroup)
 err = accessManager.DeleteExistingProjectGroup("tstprj", "tstgroup")
 ```
 
+#### Create an access token for the JFrog Platform
+
+```go
+import "github.com/jfrog/jfrog-client-go/access/services"
+
+False := false // required to be passed by reference below
+True := true   // required to be passed by reference below
+createParams := services.CreateTokenParams{
+    CommonTokenParams: auth.CommonTokenParams{
+        Scope:       "applied-permissions/groups:grp",
+        ExpiresIn:   3600,
+        Refreshable: &True,
+        Audience:    "jfrt@*",
+    },
+    Description:           "my best token",
+    IncludeReferenceToken: &False,
+    Username:              "username",
+}
+
+accessToken, err := accessManager.CreateAccessToken(createParams)
+```
+
+#### Refresh an existing access token
+
+```go
+import "github.com/jfrog/jfrog-client-go/access/services"
+
+refreshParams := services.CreateTokenParams{
+    CommonTokenParams: auth.CommonTokenParams{
+        RefreshToken: accessToken.RefreshToken,
+    },
+}
+refreshedToken, err := accessManager.RefreshAccessToken(refreshParams)
+```
+
 ## Distribution APIs
 
 ### Creating Distribution Service Manager
